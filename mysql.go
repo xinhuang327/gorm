@@ -40,6 +40,10 @@ func (s *mysql) SqlTag(value reflect.Value, size int) string {
 		if _, ok := value.Interface().(time.Time); ok {
 			return "timestamp NULL"
 		}
+	case reflect.Array:
+		if value.Type().Elem().Kind() == reflect.Uint8 {
+			return fmt.Sprintf("binary(%d)", value.Len())
+		}
 	default:
 		if _, ok := value.Interface().([]byte); ok {
 			if size > 0 && size < 65532 {
@@ -58,6 +62,11 @@ func (s *mysql) PrimaryKeyTag(value reflect.Value, size int) string {
 		return "int" + suffix
 	case reflect.Int64, reflect.Uint64:
 		return "bigint" + suffix
+	case reflect.Array:
+		if value.Type().Elem().Kind() == reflect.Uint8 {
+			return fmt.Sprintf("binary(%d) NOT NULL PRIMARY KEY", value.Len())
+		}
+		fallthrough
 	default:
 		panic("Invalid primary key type")
 	}

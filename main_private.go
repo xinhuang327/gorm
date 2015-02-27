@@ -1,6 +1,7 @@
 package gorm
 
 import "time"
+import "runtime/debug"
 
 func (s *DB) clone() *DB {
 	db := DB{db: s.db, parent: s.parent, logMode: s.logMode, values: map[string]interface{}{}, Value: s.Value, Error: s.Error}
@@ -26,6 +27,7 @@ func (s *DB) err(err error) error {
 				go s.print(fileWithLineNum(), err)
 			} else {
 				s.log(err)
+				debug.PrintStack()
 			}
 		}
 		s.Error = err

@@ -16,6 +16,13 @@ func (scope *Scope) primaryCondition(value interface{}) string {
 }
 
 func (scope *Scope) buildWhereCondition(clause map[string]interface{}) (str string) {
+
+	// To support byte array as binary primary key
+	queryValueType := reflect.TypeOf(clause["query"])
+	if queryValueType.Kind() == reflect.Array && queryValueType.Elem().Kind() == reflect.Uint8 {
+		return scope.primaryCondition(scope.AddToVars(clause["query"]))
+	}
+
 	switch value := clause["query"].(type) {
 	case string:
 		// if string is number

@@ -73,7 +73,6 @@ func Query(scope *Scope) {
 					values[index] = &value
 				}
 			}
-
 			scope.Err(rows.Scan(values...))
 
 			for index, column := range columns {
