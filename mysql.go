@@ -38,7 +38,8 @@ func (s *mysql) SqlTag(value reflect.Value, size int) string {
 		return "longtext"
 	case reflect.Struct:
 		if _, ok := value.Interface().(time.Time); ok {
-			return "timestamp NULL"
+			// return "timestamp NULL"
+			return "datetime(3) NULL" //for MySQL 5.6/5.6+
 		}
 	case reflect.Array:
 		if value.Type().Elem().Kind() == reflect.Uint8 {

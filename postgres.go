@@ -62,6 +62,11 @@ func (s *postgres) PrimaryKeyTag(value reflect.Value, size int) string {
 		return "serial PRIMARY KEY"
 	case reflect.Int64, reflect.Uint64:
 		return "bigserial PRIMARY KEY"
+	case reflect.Array:
+		if value.Type().Elem().Kind() == reflect.Uint8 {
+			return "bytea PRIMARY KEY" // for Uid/[]byte Type
+		}
+		fallthrough
 	default:
 		panic("Invalid primary key type")
 	}
