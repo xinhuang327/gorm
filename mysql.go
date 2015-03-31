@@ -41,6 +41,9 @@ func (s *mysql) SqlTag(value reflect.Value, size int) string {
 			// return "timestamp NULL"
 			return "datetime(3) NULL" //for MySQL 5.6/5.6+
 		}
+		if value.Type().Name() == "GeoPoint" {
+			return "point"
+		}
 	case reflect.Array:
 		if value.Type().Elem().Kind() == reflect.Uint8 {
 			return fmt.Sprintf("binary(%d)", value.Len())

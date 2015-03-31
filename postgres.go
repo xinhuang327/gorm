@@ -34,7 +34,7 @@ func (s *postgres) SqlTag(value reflect.Value, size int) string {
 	case reflect.Int64, reflect.Uint64:
 		return "bigint"
 	case reflect.Float32, reflect.Float64:
-		return "numeric"
+		return "double precision"
 	case reflect.String:
 		if size > 0 && size < 65532 {
 			return fmt.Sprintf("varchar(%d)", size)
@@ -43,6 +43,9 @@ func (s *postgres) SqlTag(value reflect.Value, size int) string {
 	case reflect.Struct:
 		if _, ok := value.Interface().(time.Time); ok {
 			return "timestamp with time zone"
+		}
+		if value.Type().Name() == "GeoPoint" {
+			return "geography(Point,4326)"
 		}
 	case reflect.Map:
 		if value.Type() == hstoreType {

@@ -68,7 +68,10 @@ func Create(scope *Scope) {
 		} else {
 			if primaryField == nil {
 				if results, err := scope.SqlDB().Exec(scope.Sql, scope.SqlVars...); err != nil {
-					scope.db.RowsAffected, _ = results.RowsAffected()
+					if results != nil {
+						scope.db.RowsAffected, _ = results.RowsAffected()
+					}
+					scope.Err(err)
 				}
 			} else if scope.Err(scope.SqlDB().QueryRow(scope.Sql, scope.SqlVars...).Scan(primaryField.Field.Addr().Interface())) == nil {
 				scope.db.RowsAffected = 1
