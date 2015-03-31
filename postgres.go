@@ -48,6 +48,10 @@ func (s *postgres) SqlTag(value reflect.Value, size int) string {
 		if value.Type() == hstoreType {
 			return "hstore"
 		}
+	case reflect.Array:
+		if value.Type().Elem().Kind() == reflect.Uint8 {
+			return "bytea"
+		}
 	default:
 		if _, ok := value.Interface().([]byte); ok {
 			return "bytea"
