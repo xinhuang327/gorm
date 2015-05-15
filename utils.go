@@ -1,7 +1,7 @@
 package gorm
 
 import (
-	"bytes"
+	// "bytes"
 	"strings"
 )
 
@@ -20,22 +20,29 @@ func init() {
 var smap = map[string]string{}
 
 func ToDBName(name string) string {
-	if v, ok := smap[name]; ok {
-		return v
+	if strings.ToLower(name) == "id" {
+		return "id"
 	}
+	return name
 
-	value := commonInitialismsReplacer.Replace(name)
-	buf := bytes.NewBufferString("")
-	for i, v := range value {
-		if i > 0 && v >= 'A' && v <= 'Z' {
-			buf.WriteRune('_')
-		}
-		buf.WriteRune(v)
-	}
+	// We don't use snake case names.
 
-	s := strings.ToLower(buf.String())
-	smap[name] = s
-	return s
+	// if v, ok := smap[name]; ok {
+	// 	return v
+	// }
+
+	// value := commonInitialismsReplacer.Replace(name)
+	// buf := bytes.NewBufferString("")
+	// for i, v := range value {
+	// 	if i > 0 && v >= 'A' && v <= 'Z' {
+	// 		buf.WriteRune('_')
+	// 	}
+	// 	buf.WriteRune(v)
+	// }
+
+	// s := strings.ToLower(buf.String())
+	// smap[name] = s
+	// return s
 }
 
 type expr struct {
