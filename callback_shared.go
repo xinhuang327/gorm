@@ -1,10 +1,6 @@
 package gorm
 
-import (
-	"fmt"
-	"reflect"
-	"strings"
-)
+import "reflect"
 
 func BeginTransaction(scope *Scope) {
 	scope.Begin()
@@ -15,8 +11,11 @@ func CommitOrRollbackTransaction(scope *Scope) {
 }
 
 func SaveBeforeAssociations(scope *Scope) {
+	if !scope.shouldSaveAssociations() {
+		return
+	}
 	for _, field := range scope.Fields() {
-		if !field.IsBlank && !field.IsIgnored {
+		if scope.changeableField(field) && !field.IsBlank && !field.IsIgnored {
 			if relationship := field.Relationship; relationship != nil && relationship.Kind == "belongs_to" {
 				value := field.Field
 				scope.Err(scope.NewDB().Save(value.Addr().Interface()).Error)
@@ -29,8 +28,11 @@ func SaveBeforeAssociations(scope *Scope) {
 }
 
 func SaveAfterAssociations(scope *Scope) {
+	if !scope.shouldSaveAssociations() {
+		return
+	}
 	for _, field := range scope.Fields() {
-		if !field.IsBlank && !field.IsIgnored {
+		if scope.changeableField(field) && !field.IsBlank && !field.IsIgnored {
 			if relationship := field.Relationship; relationship != nil &&
 				(relationship.Kind == "has_one" || relationship.Kind == "has_many" || relationship.Kind == "many_to_many") {
 				value := field.Field
@@ -42,7 +44,7 @@ func SaveAfterAssociations(scope *Scope) {
 						elem := value.Index(i).Addr().Interface()
 						newScope := newDB.NewScope(elem)
 
-						if relationship.JoinTable == "" && relationship.ForeignFieldName != "" {
+						if relationship.JoinTableHandler == nil && relationship.ForeignFieldName != "" {
 							scope.Err(newScope.SetColumn(relationship.ForeignFieldName, scope.PrimaryKeyValue()))
 						}
 
@@ -52,25 +54,8 @@ func SaveAfterAssociations(scope *Scope) {
 
 						scope.Err(newDB.Save(elem).Error)
 
-						if joinTable := relationship.JoinTable; joinTable != "" {
-							quotedForeignDBName := scope.Quote(relationship.ForeignDBName)
-							foreignValue := scope.PrimaryKeyValue()
-							quoteAssociationForeignDBName := scope.Quote(relationship.AssociationForeignDBName)
-							associationForeignValue := newScope.PrimaryKeyValue()
-
-							newScope.Raw(fmt.Sprintf(
-								"INSERT INTO %v (%v) SELECT %v %v WHERE NOT EXISTS (SELECT * FROM %v WHERE %v = %v AND %v = %v);",
-								joinTable,
-								strings.Join([]string{quotedForeignDBName, quoteAssociationForeignDBName}, ","),
-								strings.Join([]string{newScope.AddToVars(foreignValue), newScope.AddToVars(associationForeignValue)}, ","),
-								scope.Dialect().SelectFromDummyTable(),
-								joinTable,
-								quotedForeignDBName,
-								newScope.AddToVars(foreignValue),
-								quoteAssociationForeignDBName,
-								newScope.AddToVars(associationForeignValue),
-							))
-							scope.Err(scope.NewDB().Exec(newScope.Sql, newScope.SqlVars...).Error)
+						if joinTableHandler := relationship.JoinTableHandler; joinTableHandler != nil {
+							scope.Err(joinTableHandler.Add(scope.NewDB(), scope.Value, newScope.Value))
 						}
 					}
 				default:

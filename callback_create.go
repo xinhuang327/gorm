@@ -24,17 +24,27 @@ func Create(scope *Scope) {
 	if !scope.HasError() {
 		// set create sql
 		var sqls, columns []string
-		for _, field := range scope.Fields() {
-			if (field.IsNormal && !field.IsPrimaryKey) || (field.IsPrimaryKey && !field.IsBlank) {
-				if !field.IsBlank || !field.HasDefaultValue {
-					columns = append(columns, scope.Quote(field.DBName))
-					sqls = append(sqls, scope.AddToVars(field.Field.Interface()))
+		fields := scope.Fields()
+		for _, field := range fields {
+			if scope.changeableField(field) {
+				if field.IsNormal {
+					if !field.IsPrimaryKey || (field.IsPrimaryKey && !field.IsBlank) {
+						if !field.IsBlank || !field.HasDefaultValue {
+							columns = append(columns, scope.Quote(field.DBName))
+							sqls = append(sqls, scope.AddToVars(field.Field.Interface()))
+						}
+					}
+				} else if relationship := field.Relationship; relationship != nil && relationship.Kind == "belongs_to" {
+					if relationField := fields[relationship.ForeignDBName]; !scope.changeableField(relationField) {
+						columns = append(columns, scope.Quote(relationField.DBName))
+						sqls = append(sqls, scope.AddToVars(relationField.Field.Interface()))
+					}
 				}
 			}
 		}
 
 		returningKey := "*"
-		primaryField := scope.PrimaryKeyField()
+		primaryField := scope.PrimaryField()
 		if primaryField != nil {
 			returningKey = scope.Quote(primaryField.DBName)
 		}

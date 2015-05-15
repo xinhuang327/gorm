@@ -1,6 +1,9 @@
 package gorm_test
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func TestHasOneAndHasManyAssociation(t *testing.T) {
 	DB.DropTable(Category{})
@@ -61,6 +64,7 @@ func TestRelated(t *testing.T) {
 		ShippingAddress: Address{Address1: "Shipping Address - Address 1"},
 		Emails:          []Email{{Email: "jinzhu@example.com"}, {Email: "jinzhu-2@example@example.com"}},
 		CreditCard:      CreditCard{Number: "1234567890"},
+		Company:         Company{Name: "company1"},
 	}
 
 	DB.Save(&user)
@@ -122,6 +126,11 @@ func TestRelated(t *testing.T) {
 	}
 
 	if !DB.Model(&CreditCard{}).Related(&User{}).RecordNotFound() {
+		t.Errorf("RecordNotFound for Related")
+	}
+
+	var company Company
+	if DB.Model(&user).Related(&company, "Company").RecordNotFound() || company.Name != "company1" {
 		t.Errorf("RecordNotFound for Related")
 	}
 }
@@ -217,5 +226,39 @@ func TestManyToMany(t *testing.T) {
 	DB.Model(&user).Association("Languages").Clear()
 	if len(user.Languages) != 0 || DB.Model(&user).Association("Languages").Count() != 0 {
 		t.Errorf("Relations should be cleared")
+	}
+}
+
+func TestForeignKey(t *testing.T) {
+	for _, structField := range DB.NewScope(&User{}).GetStructFields() {
+		for _, foreignKey := range []string{"BillingAddressID", "ShippingAddressId", "CompanyID"} {
+			if structField.Name == foreignKey && !structField.IsForeignKey {
+				t.Errorf(fmt.Sprintf("%v should be foreign key", foreignKey))
+			}
+		}
+	}
+
+	for _, structField := range DB.NewScope(&Email{}).GetStructFields() {
+		for _, foreignKey := range []string{"UserId"} {
+			if structField.Name == foreignKey && !structField.IsForeignKey {
+				t.Errorf(fmt.Sprintf("%v should be foreign key", foreignKey))
+			}
+		}
+	}
+
+	for _, structField := range DB.NewScope(&Post{}).GetStructFields() {
+		for _, foreignKey := range []string{"CategoryId", "MainCategoryId"} {
+			if structField.Name == foreignKey && !structField.IsForeignKey {
+				t.Errorf(fmt.Sprintf("%v should be foreign key", foreignKey))
+			}
+		}
+	}
+
+	for _, structField := range DB.NewScope(&Comment{}).GetStructFields() {
+		for _, foreignKey := range []string{"PostId"} {
+			if structField.Name == foreignKey && !structField.IsForeignKey {
+				t.Errorf(fmt.Sprintf("%v should be foreign key", foreignKey))
+			}
+		}
 	}
 }

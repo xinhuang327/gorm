@@ -11,11 +11,13 @@ import (
 	"time"
 )
 
+var modelStructs = map[reflect.Type]*ModelStruct{}
+
 type ModelStruct struct {
-	PrimaryKeyField *StructField
-	StructFields    []*StructField
-	ModelType       reflect.Type
-	TableName       string
+	PrimaryFields []*StructField
+	StructFields  []*StructField
+	ModelType     reflect.Type
+	TableName     func(*DB) string
 }
 
 type StructField struct {
@@ -27,7 +29,6 @@ type StructField struct {
 	IsIgnored       bool
 	IsScanner       bool
 	HasDefaultValue bool
-	SqlTag          string
 	Tag             reflect.StructTag
 	Struct          reflect.StructField
 	IsForeignKey    bool
@@ -44,7 +45,6 @@ func (structField *StructField) clone() *StructField {
 		IsIgnored:       structField.IsIgnored,
 		IsScanner:       structField.IsScanner,
 		HasDefaultValue: structField.HasDefaultValue,
-		SqlTag:          structField.SqlTag,
 		Tag:             structField.Tag,
 		Struct:          structField.Struct,
 		IsForeignKey:    structField.IsForeignKey,
@@ -60,13 +60,13 @@ type Relationship struct {
 	ForeignDBName               string
 	AssociationForeignFieldName string
 	AssociationForeignDBName    string
-	JoinTable                   string
+	JoinTableHandler            JoinTableHandlerInterface
 }
 
 var pluralMapKeys = []*regexp.Regexp{regexp.MustCompile("ch$"), regexp.MustCompile("ss$"), regexp.MustCompile("sh$"), regexp.MustCompile("day$"), regexp.MustCompile("y$"), regexp.MustCompile("x$"), regexp.MustCompile("([^s])s?$")}
 var pluralMapValues = []string{"ches", "sses", "shes", "days", "ies", "xes", "${1}s"}
 
-func (scope *Scope) GetModelStruct(noRelationship ...bool) *ModelStruct {
+func (scope *Scope) GetModelStruct() *ModelStruct {
 	var modelStruct ModelStruct
 
 	reflectValue := reflect.Indirect(reflect.ValueOf(scope.Value))
@@ -84,10 +84,8 @@ func (scope *Scope) GetModelStruct(noRelationship ...bool) *ModelStruct {
 		scopeType = scopeType.Elem()
 	}
 
-	if scope.db != nil {
-		if value, ok := scope.db.parent.ModelStructs[scopeType]; ok {
-			return value
-		}
+	if value, ok := modelStructs[scopeType]; ok {
+		return value
 	}
 
 	modelStruct.ModelType = scopeType
@@ -99,17 +97,23 @@ func (scope *Scope) GetModelStruct(noRelationship ...bool) *ModelStruct {
 	if fm := reflect.New(scopeType).MethodByName("TableName"); fm.IsValid() {
 		if results := fm.Call([]reflect.Value{}); len(results) > 0 {
 			if name, ok := results[0].Interface().(string); ok {
-				modelStruct.TableName = name
+				modelStruct.TableName = func(*DB) string {
+					return name
+				}
 			}
 		}
 	} else {
-		modelStruct.TableName = ToDBName(scopeType.Name())
+		name := ToDBName(scopeType.Name())
 		if scope.db == nil || !scope.db.parent.singularTable {
 			for index, reg := range pluralMapKeys {
-				if reg.MatchString(modelStruct.TableName) {
-					modelStruct.TableName = reg.ReplaceAllString(modelStruct.TableName, pluralMapValues[index])
+				if reg.MatchString(name) {
+					name = reg.ReplaceAllString(name, pluralMapValues[index])
 				}
 			}
+		}
+
+		modelStruct.TableName = func(*DB) string {
+			return name
 		}
 	}
 
@@ -131,7 +135,7 @@ func (scope *Scope) GetModelStruct(noRelationship ...bool) *ModelStruct {
 				gormSettings := parseTagSetting(field.Tag.Get("gorm"))
 				if _, ok := gormSettings["PRIMARY_KEY"]; ok {
 					field.IsPrimaryKey = true
-					modelStruct.PrimaryKeyField = field
+					modelStruct.PrimaryFields = append(modelStruct.PrimaryFields, field)
 				}
 
 				if _, ok := sqlSettings["DEFAULT"]; ok {
@@ -148,145 +152,149 @@ func (scope *Scope) GetModelStruct(noRelationship ...bool) *ModelStruct {
 		}
 	}
 
-	for _, field := range fields {
-		if !field.IsIgnored {
-			fieldStruct := field.Struct
-			fieldType, indirectType := fieldStruct.Type, fieldStruct.Type
-			if indirectType.Kind() == reflect.Ptr {
-				indirectType = indirectType.Elem()
-			}
-
-			if _, isScanner := reflect.New(fieldType).Interface().(sql.Scanner); isScanner {
-				field.IsScanner, field.IsNormal = true, true
-			}
-
-			if _, isTime := reflect.New(indirectType).Interface().(*time.Time); isTime {
-				field.IsNormal = true
-			}
-
-			if !field.IsNormal && len(noRelationship) == 0 {
-				gormSettings := parseTagSetting(field.Tag.Get("gorm"))
-				toModelStruct := scope.New(reflect.New(fieldStruct.Type).Interface()).GetModelStruct(true)
-				getForeignField := func(column string, fields []*StructField) *StructField {
-					for _, field := range fields {
-						if field.Name == column || field.DBName == ToDBName(column) {
-							return field
-						}
-					}
-					return nil
+	defer func() {
+		for _, field := range fields {
+			if !field.IsIgnored {
+				fieldStruct := field.Struct
+				fieldType, indirectType := fieldStruct.Type, fieldStruct.Type
+				if indirectType.Kind() == reflect.Ptr {
+					indirectType = indirectType.Elem()
 				}
 
-				var relationship = &Relationship{}
-
-				foreignKey := gormSettings["FOREIGNKEY"]
-				if polymorphic := gormSettings["POLYMORPHIC"]; polymorphic != "" {
-					if polymorphicField := getForeignField(polymorphic+"Id", toModelStruct.StructFields); polymorphicField != nil {
-						if polymorphicType := getForeignField(polymorphic+"Type", toModelStruct.StructFields); polymorphicType != nil {
-							relationship.ForeignFieldName = polymorphicField.Name
-							relationship.ForeignDBName = polymorphicField.DBName
-							relationship.PolymorphicType = polymorphicType.Name
-							relationship.PolymorphicDBName = polymorphicType.DBName
-							polymorphicType.IsForeignKey = true
-							polymorphicField.IsForeignKey = true
-						}
-					}
+				if _, isScanner := reflect.New(fieldType).Interface().(sql.Scanner); isScanner {
+					field.IsScanner, field.IsNormal = true, true
 				}
 
-				switch indirectType.Kind() {
-				case reflect.Slice:
-					if len(toModelStruct.StructFields) > 0 {
-						if foreignKey == "" {
-							foreignKey = scopeType.Name() + "Id"
-						}
-
-						if many2many := gormSettings["MANY2MANY"]; many2many != "" {
-							relationship.Kind = "many_to_many"
-							relationship.JoinTable = many2many
-
-							associationForeignKey := gormSettings["ASSOCIATIONFOREIGNKEY"]
-							if associationForeignKey == "" {
-								associationForeignKey = toModelStruct.ModelType.Name() + "Id"
-							}
-
-							relationship.ForeignFieldName = foreignKey
-							relationship.ForeignDBName = ToDBName(foreignKey)
-							relationship.AssociationForeignFieldName = associationForeignKey
-							relationship.AssociationForeignDBName = ToDBName(associationForeignKey)
-							field.Relationship = relationship
-						} else {
-							relationship.Kind = "has_many"
-							if foreignField := getForeignField(foreignKey, toModelStruct.StructFields); foreignField != nil {
-								relationship.ForeignFieldName = foreignField.Name
-								relationship.ForeignDBName = foreignField.DBName
-								foreignField.IsForeignKey = true
-								field.Relationship = relationship
-							} else if relationship.ForeignFieldName != "" {
-								field.Relationship = relationship
-							}
-						}
-					} else {
-						field.IsNormal = true
-					}
-				case reflect.Struct:
-					if _, ok := gormSettings["EMBEDDED"]; ok || fieldStruct.Anonymous {
-						for _, f := range scope.New(reflect.New(indirectType).Interface()).GetStructFields() {
-							f = f.clone()
-							f.Names = append([]string{fieldStruct.Name}, f.Names...)
-							modelStruct.StructFields = append(modelStruct.StructFields, f)
-							if f.IsPrimaryKey {
-								modelStruct.PrimaryKeyField = f
-							}
-						}
-						continue
-					} else {
-						belongsToForeignKey := foreignKey
-						if belongsToForeignKey == "" {
-							belongsToForeignKey = field.Name + "Id"
-						}
-
-						if foreignField := getForeignField(belongsToForeignKey, fields); foreignField != nil {
-							relationship.Kind = "belongs_to"
-							relationship.ForeignFieldName = foreignField.Name
-							relationship.ForeignDBName = foreignField.DBName
-							foreignField.IsForeignKey = true
-							field.Relationship = relationship
-						} else {
-							if foreignKey == "" {
-								foreignKey = modelStruct.ModelType.Name() + "Id"
-							}
-							relationship.Kind = "has_one"
-							if foreignField := getForeignField(foreignKey, toModelStruct.StructFields); foreignField != nil {
-								relationship.ForeignFieldName = foreignField.Name
-								relationship.ForeignDBName = foreignField.DBName
-								foreignField.IsForeignKey = true
-								field.Relationship = relationship
-							} else if relationship.ForeignFieldName != "" {
-								field.Relationship = relationship
-							}
-						}
-					}
-				default:
+				if _, isTime := reflect.New(indirectType).Interface().(*time.Time); isTime {
 					field.IsNormal = true
 				}
-			}
 
-			if field.IsNormal {
-				if modelStruct.PrimaryKeyField == nil && field.DBName == "id" {
-					field.IsPrimaryKey = true
-					modelStruct.PrimaryKeyField = field
+				if !field.IsNormal {
+					gormSettings := parseTagSetting(field.Tag.Get("gorm"))
+					toScope := scope.New(reflect.New(fieldStruct.Type).Interface())
+
+					getForeignField := func(column string, fields []*StructField) *StructField {
+						for _, field := range fields {
+							if field.Name == column || field.DBName == ToDBName(column) {
+								return field
+							}
+						}
+						return nil
+					}
+
+					var relationship = &Relationship{}
+
+					foreignKey := gormSettings["FOREIGNKEY"]
+					if polymorphic := gormSettings["POLYMORPHIC"]; polymorphic != "" {
+						if polymorphicField := getForeignField(polymorphic+"Id", toScope.GetStructFields()); polymorphicField != nil {
+							if polymorphicType := getForeignField(polymorphic+"Type", toScope.GetStructFields()); polymorphicType != nil {
+								relationship.ForeignFieldName = polymorphicField.Name
+								relationship.ForeignDBName = polymorphicField.DBName
+								relationship.PolymorphicType = polymorphicType.Name
+								relationship.PolymorphicDBName = polymorphicType.DBName
+								polymorphicType.IsForeignKey = true
+								polymorphicField.IsForeignKey = true
+							}
+						}
+					}
+
+					switch indirectType.Kind() {
+					case reflect.Slice:
+						elemType := indirectType.Elem()
+						if elemType.Kind() == reflect.Ptr {
+							elemType = elemType.Elem()
+						}
+
+						if elemType.Kind() == reflect.Struct {
+							if foreignKey == "" {
+								foreignKey = scopeType.Name() + "Id"
+							}
+
+							if many2many := gormSettings["MANY2MANY"]; many2many != "" {
+								relationship.Kind = "many_to_many"
+								associationForeignKey := gormSettings["ASSOCIATIONFOREIGNKEY"]
+								if associationForeignKey == "" {
+									associationForeignKey = elemType.Name() + "Id"
+								}
+
+								relationship.ForeignFieldName = foreignKey
+								relationship.ForeignDBName = ToDBName(foreignKey)
+								relationship.AssociationForeignFieldName = associationForeignKey
+								relationship.AssociationForeignDBName = ToDBName(associationForeignKey)
+
+								joinTableHandler := JoinTableHandler{}
+								joinTableHandler.Setup(relationship, many2many, scopeType, elemType)
+								relationship.JoinTableHandler = &joinTableHandler
+								field.Relationship = relationship
+							} else {
+								relationship.Kind = "has_many"
+								if foreignField := getForeignField(foreignKey, toScope.GetStructFields()); foreignField != nil {
+									relationship.ForeignFieldName = foreignField.Name
+									relationship.ForeignDBName = foreignField.DBName
+									foreignField.IsForeignKey = true
+									field.Relationship = relationship
+								} else if relationship.ForeignFieldName != "" {
+									field.Relationship = relationship
+								}
+							}
+						} else {
+							field.IsNormal = true
+						}
+					case reflect.Struct:
+						if _, ok := gormSettings["EMBEDDED"]; ok || fieldStruct.Anonymous {
+							for _, toField := range toScope.GetStructFields() {
+								toField = toField.clone()
+								toField.Names = append([]string{fieldStruct.Name}, toField.Names...)
+								modelStruct.StructFields = append(modelStruct.StructFields, toField)
+								if toField.IsPrimaryKey {
+									modelStruct.PrimaryFields = append(modelStruct.PrimaryFields, toField)
+								}
+							}
+							continue
+						} else {
+							belongsToForeignKey := foreignKey
+							if belongsToForeignKey == "" {
+								belongsToForeignKey = field.Name + "Id"
+							}
+
+							if foreignField := getForeignField(belongsToForeignKey, fields); foreignField != nil {
+								relationship.Kind = "belongs_to"
+								relationship.ForeignFieldName = foreignField.Name
+								relationship.ForeignDBName = foreignField.DBName
+								foreignField.IsForeignKey = true
+								field.Relationship = relationship
+							} else {
+								if foreignKey == "" {
+									foreignKey = modelStruct.ModelType.Name() + "Id"
+								}
+								relationship.Kind = "has_one"
+								if foreignField := getForeignField(foreignKey, toScope.GetStructFields()); foreignField != nil {
+									relationship.ForeignFieldName = foreignField.Name
+									relationship.ForeignDBName = foreignField.DBName
+									foreignField.IsForeignKey = true
+									field.Relationship = relationship
+								} else if relationship.ForeignFieldName != "" {
+									field.Relationship = relationship
+								}
+							}
+						}
+					default:
+						field.IsNormal = true
+					}
 				}
 
-				if scope.db != nil {
-					scope.generateSqlTag(field)
+				if field.IsNormal {
+					if len(modelStruct.PrimaryFields) == 0 && field.DBName == "id" {
+						field.IsPrimaryKey = true
+						modelStruct.PrimaryFields = append(modelStruct.PrimaryFields, field)
+					}
 				}
 			}
+			modelStruct.StructFields = append(modelStruct.StructFields, field)
 		}
-		modelStruct.StructFields = append(modelStruct.StructFields, field)
-	}
+	}()
 
-	if scope.db != nil && len(noRelationship) == 0 {
-		scope.db.parent.ModelStructs[scopeType] = &modelStruct
-	}
+	modelStructs[scopeType] = &modelStruct
 
 	return &modelStruct
 }
@@ -295,7 +303,7 @@ func (scope *Scope) GetStructFields() (fields []*StructField) {
 	return scope.GetModelStruct().StructFields
 }
 
-func (scope *Scope) generateSqlTag(field *StructField) {
+func (scope *Scope) generateSqlTag(field *StructField) string {
 	var sqlType string
 	structType := field.Struct.Type
 	if structType.Kind() == reflect.Ptr {
@@ -310,7 +318,7 @@ func (scope *Scope) generateSqlTag(field *StructField) {
 
 	additionalType := sqlSettings["NOT NULL"] + " " + sqlSettings["UNIQUE"]
 	if value, ok := sqlSettings["DEFAULT"]; ok {
-		additionalType = additionalType + "DEFAULT " + value
+		additionalType = additionalType + " DEFAULT " + value
 	}
 
 	if field.IsScanner && false { // WTF is this? Skip this block for now - adrian
@@ -331,17 +339,18 @@ func (scope *Scope) generateSqlTag(field *StructField) {
 			size, _ = strconv.Atoi(value)
 		}
 
+		_, autoIncrease := sqlSettings["AUTO_INCREMENT"]
 		if field.IsPrimaryKey {
-			sqlType = scope.Dialect().PrimaryKeyTag(reflectValue, size)
-		} else {
-			sqlType = scope.Dialect().SqlTag(reflectValue, size)
+			autoIncrease = true
 		}
+
+		sqlType = scope.Dialect().SqlTag(reflectValue, size, autoIncrease)
 	}
 
 	if strings.TrimSpace(additionalType) == "" {
-		field.SqlTag = sqlType
+		return sqlType
 	} else {
-		field.SqlTag = fmt.Sprintf("%v %v", sqlType, additionalType)
+		return fmt.Sprintf("%v %v", sqlType, additionalType)
 	}
 }
 

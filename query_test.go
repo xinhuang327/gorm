@@ -16,10 +16,10 @@ func TestFirstAndLast(t *testing.T) {
 
 	var user1, user2, user3, user4 User
 	DB.First(&user1)
-	DB.Order("id").Find(&user2)
+	DB.Order("id").Limit(1).Find(&user2)
 
 	DB.Last(&user3)
-	DB.Order("id desc").Find(&user4)
+	DB.Order("id desc").Limit(1).Find(&user4)
 	if user1.Id != user2.Id || user3.Id != user4.Id {
 		t.Errorf("First and Last should by order by primary key")
 	}
@@ -41,10 +41,10 @@ func TestFirstAndLastWithNoStdPrimaryKey(t *testing.T) {
 
 	var animal1, animal2, animal3, animal4 Animal
 	DB.First(&animal1)
-	DB.Order("counter").Find(&animal2)
+	DB.Order("counter").Limit(1).Find(&animal2)
 
 	DB.Last(&animal3)
-	DB.Order("counter desc").Find(&animal4)
+	DB.Order("counter desc").Limit(1).Find(&animal4)
 	if animal1.Counter != animal2.Counter || animal3.Counter != animal4.Counter {
 		t.Errorf("First and Last should work correctly")
 	}
@@ -367,8 +367,16 @@ func TestCount(t *testing.T) {
 }
 
 func TestNot(t *testing.T) {
+	DB.Create(getPreparedUser("user1", "not"))
+	DB.Create(getPreparedUser("user2", "not"))
+	DB.Create(getPreparedUser("user3", "not"))
+	DB.Create(getPreparedUser("user4", "not"))
+	DB := DB.Where("role = ?", "not")
+
 	var users1, users2, users3, users4, users5, users6, users7, users8 []User
-	DB.Find(&users1)
+	if DB.Find(&users1).RowsAffected != 4 {
+		t.Errorf("should find 4 not users")
+	}
 	DB.Not(users1[0].Id).Find(&users2)
 
 	if len(users1)-len(users2) != 1 {
@@ -381,43 +389,43 @@ func TestNot(t *testing.T) {
 	}
 
 	var name3Count int64
-	DB.Table("users").Where("name = ?", "3").Count(&name3Count)
-	DB.Not("name", "3").Find(&users4)
+	DB.Table("users").Where("name = ?", "user3").Count(&name3Count)
+	DB.Not("name", "user3").Find(&users4)
 	if len(users1)-len(users4) != int(name3Count) {
 		t.Errorf("Should find all users's name not equal 3")
 	}
 
 	users4 = []User{}
-	DB.Not("name = ?", "3").Find(&users4)
+	DB.Not("name = ?", "user3").Find(&users4)
 	if len(users1)-len(users4) != int(name3Count) {
 		t.Errorf("Should find all users's name not equal 3")
 	}
 
 	users4 = []User{}
-	DB.Not("name <> ?", "3").Find(&users4)
+	DB.Not("name <> ?", "user3").Find(&users4)
 	if len(users4) != int(name3Count) {
 		t.Errorf("Should find all users's name not equal 3")
 	}
 
-	DB.Not(User{Name: "3"}).Find(&users5)
+	DB.Not(User{Name: "user3"}).Find(&users5)
 
 	if len(users1)-len(users5) != int(name3Count) {
 		t.Errorf("Should find all users's name not equal 3")
 	}
 
-	DB.Not(map[string]interface{}{"name": "3"}).Find(&users6)
+	DB.Not(map[string]interface{}{"name": "user3"}).Find(&users6)
 	if len(users1)-len(users6) != int(name3Count) {
 		t.Errorf("Should find all users's name not equal 3")
 	}
 
-	DB.Not("name", []string{"3"}).Find(&users7)
+	DB.Not("name", []string{"user3"}).Find(&users7)
 	if len(users1)-len(users7) != int(name3Count) {
 		t.Errorf("Should find all users's name not equal 3")
 	}
 
 	var name2Count int64
-	DB.Table("users").Where("name = ?", "2").Count(&name2Count)
-	DB.Not("name", []string{"3", "2"}).Find(&users8)
+	DB.Table("users").Where("name = ?", "user2").Count(&name2Count)
+	DB.Not("name", []string{"user3", "user2"}).Find(&users8)
 	if len(users1)-len(users8) != (int(name3Count) + int(name2Count)) {
 		t.Errorf("Should find all users's name not equal 3")
 	}

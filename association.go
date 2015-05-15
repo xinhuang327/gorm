@@ -40,6 +40,7 @@ func (association *Association) Append(values ...interface{}) *Association {
 			association.setErr(errors.New("invalid association type"))
 		}
 	}
+	scope.Search.Select(association.Column)
 	scope.callCallbacks(scope.db.parent.callback.updates)
 	return association.setErr(scope.db.Error)
 }
@@ -52,12 +53,12 @@ func (association *Association) getPrimaryKeys(values ...interface{}) []interfac
 		reflectValue := reflect.Indirect(reflect.ValueOf(value))
 		if reflectValue.Kind() == reflect.Slice {
 			for i := 0; i < reflectValue.Len(); i++ {
-				if primaryField := scope.New(reflectValue.Index(i).Interface()).PrimaryKeyField(); !primaryField.IsBlank {
+				if primaryField := scope.New(reflectValue.Index(i).Interface()).PrimaryField(); !primaryField.IsBlank {
 					primaryKeys = append(primaryKeys, primaryField.Field.Interface())
 				}
 			}
 		} else if reflectValue.Kind() == reflect.Struct {
-			if primaryField := scope.New(value).PrimaryKeyField(); !primaryField.IsBlank {
+			if primaryField := scope.New(value).PrimaryField(); !primaryField.IsBlank {
 				primaryKeys = append(primaryKeys, primaryField.Field.Interface())
 			}
 		}
@@ -71,19 +72,17 @@ func (association *Association) Delete(values ...interface{}) *Association {
 	if len(primaryKeys) == 0 {
 		association.setErr(errors.New("no primary key found"))
 	} else {
+		scope := association.Scope
 		relationship := association.Field.Relationship
 		// many to many
 		if relationship.Kind == "many_to_many" {
-			whereSql := fmt.Sprintf("%v.%v = ? AND %v.%v IN (?)",
-				relationship.JoinTable, association.Scope.Quote(relationship.ForeignDBName),
-				relationship.JoinTable, association.Scope.Quote(relationship.AssociationForeignDBName))
-
-			if err := association.Scope.DB().Table(relationship.JoinTable).
-				Where(whereSql, association.PrimaryKey, primaryKeys).Delete("").Error; err == nil {
+			sql := fmt.Sprintf("%v = ? AND %v IN (?)", scope.Quote(relationship.ForeignDBName), scope.Quote(relationship.AssociationForeignDBName))
+			query := scope.NewDB().Where(sql, association.PrimaryKey, primaryKeys)
+			if err := relationship.JoinTableHandler.Delete(query, relationship); err == nil {
 				leftValues := reflect.Zero(association.Field.Field.Type())
 				for i := 0; i < association.Field.Field.Len(); i++ {
 					value := association.Field.Field.Index(i)
-					if primaryField := association.Scope.New(value.Interface()).PrimaryKeyField(); primaryField != nil {
+					if primaryField := association.Scope.New(value.Interface()).PrimaryField(); primaryField != nil {
 						var included = false
 						for _, primaryKey := range primaryKeys {
 							if equalAsString(primaryKey, primaryField.Field.Interface()) {
@@ -132,11 +131,9 @@ func (association *Association) Replace(values ...interface{}) *Association {
 			addedPrimaryKeys = append(addedPrimaryKeys, primaryKey)
 		}
 
-		whereSql := fmt.Sprintf("%v.%v = ? AND %v.%v NOT IN (?)",
-			relationship.JoinTable, association.Scope.Quote(relationship.ForeignDBName),
-			relationship.JoinTable, association.Scope.Quote(relationship.AssociationForeignDBName))
-
-		scope.DB().Table(relationship.JoinTable).Where(whereSql, association.PrimaryKey, addedPrimaryKeys).Delete("")
+		sql := fmt.Sprintf("%v = ? AND %v NOT IN (?)", scope.Quote(relationship.ForeignDBName), scope.Quote(relationship.AssociationForeignDBName))
+		query := scope.NewDB().Where(sql, association.PrimaryKey, addedPrimaryKeys)
+		association.setErr(relationship.JoinTableHandler.Delete(query, relationship))
 	} else {
 		association.setErr(errors.New("replace only support many to many"))
 	}
@@ -147,8 +144,9 @@ func (association *Association) Clear() *Association {
 	relationship := association.Field.Relationship
 	scope := association.Scope
 	if relationship.Kind == "many_to_many" {
-		whereSql := fmt.Sprintf("%v.%v = ?", relationship.JoinTable, scope.Quote(relationship.ForeignDBName))
-		if err := scope.DB().Table(relationship.JoinTable).Where(whereSql, association.PrimaryKey).Delete("").Error; err == nil {
+		sql := fmt.Sprintf("%v = ?", scope.Quote(relationship.ForeignDBName))
+		query := scope.NewDB().Where(sql, association.PrimaryKey)
+		if err := relationship.JoinTableHandler.Delete(query, relationship); err == nil {
 			association.Field.Set(reflect.Zero(association.Field.Field.Type()))
 		} else {
 			association.setErr(err)
@@ -166,9 +164,7 @@ func (association *Association) Count() int {
 	newScope := scope.New(association.Field.Field.Interface())
 
 	if relationship.Kind == "many_to_many" {
-		scope.DB().Table(relationship.JoinTable).
-			Select("COUNT(DISTINCT ?)", relationship.AssociationForeignDBName).
-			Where(relationship.ForeignDBName+" = ?", association.PrimaryKey).Row().Scan(&count)
+		relationship.JoinTableHandler.JoinWith(scope.NewDB(), association.Scope.Value).Table(newScope.TableName()).Count(&count)
 	} else if relationship.Kind == "has_many" || relationship.Kind == "has_one" {
 		whereSql := fmt.Sprintf("%v.%v = ?", newScope.QuotedTableName(), newScope.Quote(relationship.ForeignDBName))
 		countScope := scope.DB().Table(newScope.TableName()).Where(whereSql, association.PrimaryKey)

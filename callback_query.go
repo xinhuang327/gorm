@@ -1,6 +1,7 @@
 package gorm
 
 import (
+	"errors"
 	"fmt"
 	"reflect"
 )
@@ -15,26 +16,27 @@ func Query(scope *Scope) {
 		destType       reflect.Type
 	)
 
+	if orderBy, ok := scope.Get("gorm:order_by_primary_key"); ok {
+		if primaryKey := scope.PrimaryKey(); primaryKey != "" {
+			scope.Search.Order(fmt.Sprintf("%v.%v %v", scope.QuotedTableName(), scope.Quote(primaryKey), orderBy))
+		}
+	}
+
 	var dest = scope.IndirectValue()
 	if value, ok := scope.InstanceGet("gorm:query_destination"); ok {
 		dest = reflect.Indirect(reflect.ValueOf(value))
 	}
 
-	if orderBy, ok := scope.InstanceGet("gorm:order_by_primary_key"); ok {
-		if primaryKey := scope.PrimaryKey(); primaryKey != "" {
-			scope.Search = scope.Search.clone().order(fmt.Sprintf("%v.%v %v", scope.QuotedTableName(), primaryKey, orderBy))
-		}
-	}
-
-	if dest.Kind() == reflect.Slice {
+	if kind := dest.Kind(); kind == reflect.Slice {
 		isSlice = true
 		destType = dest.Type().Elem()
 		if destType.Kind() == reflect.Ptr {
 			isPtr = true
 			destType = destType.Elem()
 		}
-	} else {
-		scope.Search = scope.Search.clone().limit(1)
+	} else if kind != reflect.Struct {
+		scope.Err(errors.New("unsupported destination, should be slice or struct"))
+		return
 	}
 
 	scope.prepareQuerySql()
@@ -61,6 +63,7 @@ func Query(scope *Scope) {
 			var values = make([]interface{}, len(columns))
 
 			fields := scope.New(elem.Addr().Interface()).Fields()
+
 			for index, column := range columns {
 				if field, ok := fields[column]; ok {
 					if field.Field.Kind() == reflect.Ptr {

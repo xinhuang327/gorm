@@ -35,10 +35,11 @@ type User struct {
 	ID           int
 	Birthday     time.Time
 	Age          int
-	Name         string  `sql:"size:255"`
+	Name         string  `sql:"size:255"` // Default size for string is 255, you could reset it with this tag
+	Num          int     `sql:"AUTO_INCREMENT"`
 	CreatedAt    time.Time
 	UpdatedAt    time.Time
-	DeletedAt    time.Time
+	DeletedAt    *time.Time
 
 	Emails            []Email         // One-To-Many relationship (has many)
 	BillingAddress    Address         // One-To-One relationship (has one)
@@ -50,9 +51,9 @@ type User struct {
 }
 
 type Email struct {
-	ID         int
-	UserID     int     // Foreign key for User (belongs to)
-	Email      string  `sql:"type:varchar(100);"` // Set field's type
+	ID      int
+	UserID  int     `sql:"index"` // Foreign key (belongs to), tag `index` will create index for this field when using AutoMigrate
+	Email   string  `sql:"type:varchar(100);unique_index"` // Set field's sql type, tag `unique_index` will create unique index
 	Subscribed bool
 }
 
@@ -60,12 +61,13 @@ type Address struct {
 	ID       int
 	Address1 string         `sql:"not null;unique"` // Set field as not nullable and unique
 	Address2 string         `sql:"type:varchar(100);unique"`
-	Post     sql.NullString `sql:not null`
+	Post     sql.NullString `sql:"not null"`
 }
 
 type Language struct {
 	ID   int
-	Name string
+	Name string `sql:"index:idx_name_code"` // Create index with name, and will create combined index if find other fields defined same name
+	Code string `sql:"index:idx_name_code"` // `unique_index` also works
 }
 ```
 
@@ -74,13 +76,7 @@ type Language struct {
 * Table name is the plural of struct name's snake case, you can disable pluralization with `db.SingularTable(true)`, or [Specifying The Table Name For A Struct Permanently With TableName](#specifying-the-table-name-for-a-struct-permanently-with-tablename)
 
 ```go
-// E.g finding an existing User
-var user User
-// Gorm will know to use table "users" ("user" if pluralisation has been disabled) for all operations.
-db.First(&user)
-
-// creating a new User
-db.Save(&User{Name: "xxx"}) // table "users"
+type User struct{} // struct User's database table name is "users" by default, will be "user" if you disabled pluralisation
 ```
 
 * Column name is the snake case of field's name
@@ -88,11 +84,25 @@ db.Save(&User{Name: "xxx"}) // table "users"
 * Use `CreatedAt` to store record's created time if field exists
 * Use `UpdatedAt` to store record's updated time if field exists
 * Use `DeletedAt` to store record's deleted time if field exists [Soft Delete](#soft-delete)
+* Gorm provide a default model struct, you could embed it in your struct
+
+```go
+type Model struct {
+	ID        uint `gorm:"primary_key"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	DeletedAt *time.Time
+}
+
+type User struct {
+	gorm.Model
+	Name string
+}
+```
 
 ## Initialize Database
 
 ```go
-
 import (
 	"github.com/jinzhu/gorm"
 	_ "github.com/lib/pq"
@@ -101,12 +111,13 @@ import (
 )
 
 db, err := gorm.Open("postgres", "user=gorm dbname=gorm sslmode=disable")
-// db, err := gorm.Open("mysql", "user:password@/dbname?charset=utf8&parseTime=True")
+// db, err := gorm.Open("foundation", "dbname=gorm") // FoundationDB.
+// db, err := gorm.Open("mysql", "user:password@/dbname?charset=utf8&parseTime=True&loc=Local")
 // db, err := gorm.Open("sqlite3", "/tmp/gorm.db")
 
 // You can also use an existing database connection handle
 // dbSql, _ := sql.Open("postgres", "user=gorm dbname=gorm sslmode=disable")
-// db := gorm.Open("postgres", dbSql)
+// db, _ := gorm.Open("postgres", dbSql)
 
 // Get database connection handle [*sql.DB](http://golang.org/pkg/database/sql/#DB)
 db.DB()
@@ -129,38 +140,13 @@ db.CreateTable(&User{})
 // Drop table
 db.DropTable(&User{})
 
-// Drop table if exists
-db.DropTableIfExists(&User{})
-
 // Automating Migration
 db.AutoMigrate(&User{})
 db.AutoMigrate(&User{}, &Product{}, &Order{})
-
 // Feel free to change your struct, AutoMigrate will keep your database up-to-date.
-// Fyi, AutoMigrate will only *add new columns*, it won't update column's type or delete unused columns, to make sure your data is safe.
+// AutoMigrate will ONLY add *new columns* and *new indexes*,
+// WON'T update current column's type or delete unused columns, to protect your data.
 // If the table is not existing, AutoMigrate will create the table automatically.
-
-// Add index
-db.Model(&User{}).AddIndex("idx_user_name", "name")
-
-// Add foreign key
-// 1st param : foreignkey field
-// 2nd param : destination table(id)
-// 3rd param : ONDELETE
-// 4th param : ONUPDATE
-db.Model(&User{}).AddForeignKey("user_id", "destination_table(id)", "CASCADE", "RESTRICT")
-
-// Multiple column index
-db.Model(&User{}).AddIndex("idx_user_name_age", "name", "age")
-
-// Add unique index
-db.Model(&User{}).AddUniqueIndex("idx_user_name", "name")
-
-// Multiple column unique index
-db.Model(&User{}).AddUniqueIndex("idx_user_name_age", "name", "age")
-
-// Remove index
-db.Model(&User{}).RemoveIndex("idx_user_name")
 ```
 
 # Basic CRUD
@@ -170,18 +156,13 @@ db.Model(&User{}).RemoveIndex("idx_user_name")
 ```go
 user := User{Name: "Jinzhu", Age: 18, Birthday: time.Now()}
 
-// returns true if record hasn’t been saved (primary key `Id` is blank)
-db.NewRecord(user) // => true
+db.NewRecord(user) // => returns `true` if primary key is blank
 
 db.Create(&user)
 
-// will return false after `user` created
-db.NewRecord(user) // => false
+db.NewRecord(user) // => return `false` after `user` created
 
-// You could use `Save` to create record also if its primary key is null
-db.Save(&user)
-
-// Associations will be saved automatically when insert the record
+// Associations will be inserted automatically when save the record
 user := User{
 	Name:            "jinzhu",
 	BillingAddress:  Address{Address1: "Billing Address - Address 1"},
@@ -204,7 +185,7 @@ db.Create(&user)
 //// COMMIT;
 ```
 
-Refer [Associations](#associations) for how to work with associations
+Refer [Associations](#associations) for more details
 
 ## Query
 
@@ -247,6 +228,11 @@ db.Where("name LIKE ?", "%jin%").Find(&users)
 
 // AND
 db.Where("name = ? and age >= ?", "jinzhu", "22").Find(&users)
+
+// Time
+db.Where("updated_at > ?", lastWeek).Find(&users)
+
+db.Where("created_at BETWEEN ? AND ?", lastWeek, today).Find(&users)
 ```
 
 ### Query With Where (Struct & Map)
@@ -361,6 +347,13 @@ db.Preload("Orders").Preload("Profile").Preload("Role").Find(&users)
 //// SELECT * FROM roles WHERE id IN (4,5,6); // belongs to
 ```
 
+#### Nested Preloading
+
+```go
+db.Preload("Orders.OrderItems").Find(&users)
+db.Preload("Orders", "state = ?", "paid").Preload("Orders.OrderItems").Find(&users)
+```
+
 ## Update
 
 ```go
@@ -386,18 +379,22 @@ db.First(&user, 111).Update("name", "hello")
 //// UPDATE users SET name='hello', updated_at = '2013-11-17 21:34:10' WHERE id=111;
 
 // Update multiple attributes if they are changed
+db.Model(&user).Updates(map[string]interface{}{"name": "hello", "age": 18, "actived": false})
+
+// Update multiple attributes if they are changed (update with struct only works with none zero values)
 db.Model(&user).Updates(User{Name: "hello", Age: 18})
 //// UPDATE users SET name='hello', age=18, updated_at = '2013-11-17 21:34:10' WHERE id = 111;
 ```
 
 ### Update Without Callbacks
 
-By default, update will call BeforeUpdate, AfterUpdate callbacks, if you want to update w/o callbacks:
+By default, update will call BeforeUpdate, AfterUpdate callbacks, if you want to update w/o callbacks and w/o saving associations:
 
 ```go
 db.Model(&user).UpdateColumn("name", "hello")
 //// UPDATE users SET name='hello' WHERE id = 111;
 
+// Update with struct only works with none zero values, or use map[string]interface{}
 db.Model(&user).UpdateColumns(User{Name: "hello", Age: 18})
 //// UPDATE users SET name='hello', age=18 WHERE id = 111;
 ```
@@ -408,13 +405,13 @@ db.Model(&user).UpdateColumns(User{Name: "hello", Age: 18})
 db.Table("users").Where("id = ?", 10).Updates(map[string]interface{}{"name": "hello", "age": 18})
 //// UPDATE users SET name='hello', age=18 WHERE id = 10;
 
+// Update with struct only works with none zero values, or use map[string]interface{}
 db.Model(User{}).Updates(User{Name: "hello", Age: 18})
 //// UPDATE users SET name='hello', age=18;
 
-// Callbacks won't be run when do batch updates
+// Callbacks won't run when do batch updates
 
-// You may would like to know how many records updated when do batch updates
-// You could get it with `RowsAffected`
+// Use `RowsAffected` to get the count of affected records
 db.Model(User{}).Updates(User{Name: "hello", Age: 18}).RowsAffected
 ```
 
@@ -577,7 +574,7 @@ Supports polymorphic has-many and has-one associations.
     Id        int
     Name      string
     OwnerId   int
-    OwnerType int
+    OwnerType string
   }
 ```
 Note: polymorphic belongs-to and many-to-many are explicitly NOT supported, and will throw errors.
@@ -848,6 +845,12 @@ for rows.Next() {
 }
 
 db.Table("users").Select("users.name, emails.email").Joins("left join emails on emails.user_id = users.id").Scan(&results)
+
+// find a user by email address
+db.Joins("inner join emails on emails.user_id = users.id").Where("emails.email = ?", "x@example.org").Find(&user)
+
+// find all email addresses for a user
+db.Joins("left join users on users.id = emails.user_id").Where("users.name = ?", "jinzhu").Find(&emails)
 ```
 
 ## Transactions
@@ -1060,7 +1063,7 @@ If you have an existing database schema, and the primary key field is different 
 
 ```go
 type Animal struct {
-	AnimalId     int64 `gorm:"primary_key:yes"`
+	AnimalId     int64 `gorm:"primary_key"`
 	Birthday     time.Time `sql:"DEFAULT:current_timestamp"`
 	Name         string `sql:"default:'galeone'"`
 	Age          int64
@@ -1071,10 +1074,45 @@ If your column names differ from the struct fields, you can specify them like th
 
 ```go
 type Animal struct {
-	AnimalId    int64     `gorm:"column:beast_id; primary_key:yes"`
+	AnimalId    int64     `gorm:"column:beast_id;primary_key"`
 	Birthday    time.Time `gorm:"column:day_of_the_beast"`
 	Age         int64     `gorm:"column:age_of_the_beast"`
 }
+```
+
+## Composite Primary Key
+
+```go
+type Product struct {
+	ID           string `gorm:"primary_key"`
+	LanguageCode string `gorm:"primary_key"`
+}
+```
+
+## Database Indexes & Foreign Key
+
+```go
+// Add foreign key
+// 1st param : foreignkey field
+// 2nd param : destination table(id)
+// 3rd param : ONDELETE
+// 4th param : ONUPDATE
+db.Model(&User{}).AddForeignKey("role_id", "roles", "CASCADE", "RESTRICT")
+
+// Add index
+db.Model(&User{}).AddIndex("idx_user_name", "name")
+
+// Multiple column index
+db.Model(&User{}).AddIndex("idx_user_name_age", "name", "age")
+
+// Add unique index
+db.Model(&User{}).AddUniqueIndex("idx_user_name", "name")
+
+// Multiple column unique index
+db.Model(&User{}).AddUniqueIndex("idx_user_name_age", "name", "age")
+
+// Remove index
+db.Model(&User{}).RemoveIndex("idx_user_name")
 ```
 
 ## Default values

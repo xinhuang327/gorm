@@ -35,7 +35,10 @@ func init() {
 		DB, err = gorm.Open("mysql", "gorm:gorm@/gorm?charset=utf8&parseTime=True")
 	case "postgres":
 		fmt.Println("testing postgres...")
-		DB, err = gorm.Open("postgres", "user=gorm DB.ame=gorm sslmode=disable")
+		DB, err = gorm.Open("postgres", "user=gorm DB.name=gorm sslmode=disable")
+	case "foundation":
+		fmt.Println("testing foundation...")
+		DB, err = gorm.Open("foundation", "dbname=gorm port=15432 sslmode=disable")
 	case "mssql":
 		fmt.Println("testing mssql...")
 		DB, err = gorm.Open("mssql", "server=SERVER_HERE;database=rogue;user id=USER_HERE;password=PW_HERE;port=1433")
@@ -89,8 +92,12 @@ func TestExceptionsWithInvalidSql(t *testing.T) {
 }
 
 func TestSetTable(t *testing.T) {
-	if DB.Table("users").Pluck("age", &[]int{}).Error != nil {
-		t.Errorf("No errors should happen if set table for pluck")
+	DB.Create(getPreparedUser("pluck_user1", "pluck_user"))
+	DB.Create(getPreparedUser("pluck_user2", "pluck_user"))
+	DB.Create(getPreparedUser("pluck_user3", "pluck_user"))
+
+	if err := DB.Table("users").Where("role = ?", "pluck_user").Pluck("age", &[]int{}).Error; err != nil {
+		t.Errorf("No errors should happen if set table for pluck", err.Error())
 	}
 
 	var users []User
@@ -115,9 +122,11 @@ func TestSetTable(t *testing.T) {
 		t.Errorf("Query from specified table")
 	}
 
+	DB.Save(getPreparedUser("normal_user", "reset_table"))
+	DB.Table("deleted_users").Save(getPreparedUser("deleted_user", "reset_table"))
 	var user1, user2, user3 User
-	DB.First(&user1).Table("deleted_users").First(&user2).Table("").First(&user3)
-	if (user1.Name == user2.Name) || (user1.Name != user3.Name) {
+	DB.Where("role = ?", "reset_table").First(&user1).Table("deleted_users").First(&user2).Table("").First(&user3)
+	if (user1.Name != "normal_user") || (user2.Name != "deleted_user") || (user3.Name != "normal_user") {
 		t.Errorf("unset specified table with blank string")
 	}
 }
@@ -439,6 +448,14 @@ func TestHaving(t *testing.T) {
 	}
 }
 
+func DialectHasTzSupport() bool {
+	// NB: mssql and FoundationDB do not support time zones.
+	if dialect := os.Getenv("GORM_DIALECT"); dialect == "mssql" || dialect == "foundation" {
+		return false
+	}
+	return true
+}
+
 func TestTimeWithZone(t *testing.T) {
 	var format = "2006-01-02 15:04:05 -0700"
 	var times []time.Time
@@ -450,26 +467,30 @@ func TestTimeWithZone(t *testing.T) {
 		name := "time_with_zone_" + strconv.Itoa(index)
 		user := User{Name: name, Birthday: vtime}
 
-		// TODO mssql does not support time zones
-		if dialect := os.Getenv("GORM_DIALECT"); dialect == "mssql" {
+		if !DialectHasTzSupport() {
+			// If our driver dialect doesn't support TZ's, just use UTC for everything here.
 			user.Birthday = vtime.UTC()
 		}
+
 		DB.Save(&user)
-		if user.Birthday.UTC().Format(format) != "2013-02-18 17:51:49 +0000" {
-			t.Errorf("User's birthday should not be changed after save")
+		expectedBirthday := "2013-02-18 17:51:49 +0000"
+		foundBirthday := user.Birthday.UTC().Format(format)
+		if foundBirthday != expectedBirthday {
+			t.Errorf("User's birthday should not be changed after save for name=%s, expected bday=%+v but actual value=%+v", name, expectedBirthday, foundBirthday)
 		}
 
 		var findUser, findUser2, findUser3 User
 		DB.First(&findUser, "name = ?", name)
-		if findUser.Birthday.UTC().Format(format) != "2013-02-18 17:51:49 +0000" {
-			t.Errorf("User's birthday should not be changed after find")
+		foundBirthday = findUser.Birthday.UTC().Format(format)
+		if foundBirthday != expectedBirthday {
+			t.Errorf("User's birthday should not be changed after find for name=%s, expected bday=%+v but actual value=%+v or %+v", name, expectedBirthday, foundBirthday)
 		}
 
-		if DB.Where("id = ? AND birthday >= ?", findUser.Id, vtime.Add(-time.Minute)).First(&findUser2).RecordNotFound() {
+		if DB.Where("id = ? AND birthday >= ?", findUser.Id, user.Birthday.Add(-time.Minute)).First(&findUser2).RecordNotFound() {
 			t.Errorf("User should be found")
 		}
 
-		if !DB.Where("id = ? AND birthday >= ?", findUser.Id, vtime.Add(time.Minute)).First(&findUser3).RecordNotFound() {
+		if !DB.Where("id = ? AND birthday >= ?", findUser.Id, user.Birthday.Add(time.Minute)).First(&findUser3).RecordNotFound() {
 			t.Errorf("User should not be found")
 		}
 	}

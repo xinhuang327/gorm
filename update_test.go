@@ -206,3 +206,208 @@ func TestUpdateColumn(t *testing.T) {
 		t.Errorf("UpdateColumn with expression should not update UpdatedAt")
 	}
 }
+
+func TestSelectWithUpdate(t *testing.T) {
+	user := getPreparedUser("select_user", "select_with_update")
+	DB.Create(user)
+
+	var reloadUser User
+	DB.First(&reloadUser, user.Id)
+	reloadUser.Name = "new_name"
+	reloadUser.Age = 50
+	reloadUser.BillingAddress = Address{Address1: "New Billing Address"}
+	reloadUser.ShippingAddress = Address{Address1: "New ShippingAddress Address"}
+	reloadUser.CreditCard = CreditCard{Number: "987654321"}
+	reloadUser.Emails = []Email{
+		{Email: "new_user_1@example1.com"}, {Email: "new_user_2@example2.com"}, {Email: "new_user_3@example2.com"},
+	}
+	reloadUser.Company = Company{Name: "new company"}
+
+	DB.Select("Name", "BillingAddress", "CreditCard", "Company", "Emails").Save(&reloadUser)
+
+	var queryUser User
+	DB.Preload("BillingAddress").Preload("ShippingAddress").
+		Preload("CreditCard").Preload("Emails").Preload("Company").First(&queryUser, user.Id)
+
+	if queryUser.Name == user.Name || queryUser.Age != user.Age {
+		t.Errorf("Should only update users with name column")
+	}
+
+	if queryUser.BillingAddressID.Int64 == user.BillingAddressID.Int64 ||
+		queryUser.ShippingAddressId != user.ShippingAddressId ||
+		queryUser.CreditCard.ID == user.CreditCard.ID ||
+		len(queryUser.Emails) == len(user.Emails) || queryUser.Company.Id == user.Company.Id {
+		t.Errorf("Should only update selected relationships")
+	}
+}
+
+func TestSelectWithUpdateWithMap(t *testing.T) {
+	user := getPreparedUser("select_user", "select_with_update_map")
+	DB.Create(user)
+
+	updateValues := map[string]interface{}{
+		"Name":            "new_name",
+		"Age":             50,
+		"BillingAddress":  Address{Address1: "New Billing Address"},
+		"ShippingAddress": Address{Address1: "New ShippingAddress Address"},
+		"CreditCard":      CreditCard{Number: "987654321"},
+		"Emails": []Email{
+			{Email: "new_user_1@example1.com"}, {Email: "new_user_2@example2.com"}, {Email: "new_user_3@example2.com"},
+		},
+		"Company": Company{Name: "new company"},
+	}
+
+	var reloadUser User
+	DB.First(&reloadUser, user.Id)
+	DB.Model(&reloadUser).Select("Name", "BillingAddress", "CreditCard", "Company", "Emails").Update(updateValues)
+
+	var queryUser User
+	DB.Preload("BillingAddress").Preload("ShippingAddress").
+		Preload("CreditCard").Preload("Emails").Preload("Company").First(&queryUser, user.Id)
+
+	if queryUser.Name == user.Name || queryUser.Age != user.Age {
+		t.Errorf("Should only update users with name column")
+	}
+
+	if queryUser.BillingAddressID.Int64 == user.BillingAddressID.Int64 ||
+		queryUser.ShippingAddressId != user.ShippingAddressId ||
+		queryUser.CreditCard.ID == user.CreditCard.ID ||
+		len(queryUser.Emails) == len(user.Emails) || queryUser.Company.Id == user.Company.Id {
+		t.Errorf("Should only update selected relationships")
+	}
+}
+
+func TestOmitWithUpdate(t *testing.T) {
+	user := getPreparedUser("omit_user", "omit_with_update")
+	DB.Create(user)
+
+	var reloadUser User
+	DB.First(&reloadUser, user.Id)
+	reloadUser.Name = "new_name"
+	reloadUser.Age = 50
+	reloadUser.BillingAddress = Address{Address1: "New Billing Address"}
+	reloadUser.ShippingAddress = Address{Address1: "New ShippingAddress Address"}
+	reloadUser.CreditCard = CreditCard{Number: "987654321"}
+	reloadUser.Emails = []Email{
+		{Email: "new_user_1@example1.com"}, {Email: "new_user_2@example2.com"}, {Email: "new_user_3@example2.com"},
+	}
+	reloadUser.Company = Company{Name: "new company"}
+
+	DB.Omit("Name", "BillingAddress", "CreditCard", "Company", "Emails").Save(&reloadUser)
+
+	var queryUser User
+	DB.Preload("BillingAddress").Preload("ShippingAddress").
+		Preload("CreditCard").Preload("Emails").Preload("Company").First(&queryUser, user.Id)
+
+	if queryUser.Name != user.Name || queryUser.Age == user.Age {
+		t.Errorf("Should only update users with name column")
+	}
+
+	if queryUser.BillingAddressID.Int64 != user.BillingAddressID.Int64 ||
+		queryUser.ShippingAddressId == user.ShippingAddressId ||
+		queryUser.CreditCard.ID != user.CreditCard.ID ||
+		len(queryUser.Emails) != len(user.Emails) || queryUser.Company.Id != user.Company.Id {
+		t.Errorf("Should only update relationships that not omited")
+	}
+}
+
+func TestOmitWithUpdateWithMap(t *testing.T) {
+	user := getPreparedUser("select_user", "select_with_update_map")
+	DB.Create(user)
+
+	updateValues := map[string]interface{}{
+		"Name":            "new_name",
+		"Age":             50,
+		"BillingAddress":  Address{Address1: "New Billing Address"},
+		"ShippingAddress": Address{Address1: "New ShippingAddress Address"},
+		"CreditCard":      CreditCard{Number: "987654321"},
+		"Emails": []Email{
+			{Email: "new_user_1@example1.com"}, {Email: "new_user_2@example2.com"}, {Email: "new_user_3@example2.com"},
+		},
+		"Company": Company{Name: "new company"},
+	}
+
+	var reloadUser User
+	DB.First(&reloadUser, user.Id)
+	DB.Model(&reloadUser).Omit("Name", "BillingAddress", "CreditCard", "Company", "Emails").Update(updateValues)
+
+	var queryUser User
+	DB.Preload("BillingAddress").Preload("ShippingAddress").
+		Preload("CreditCard").Preload("Emails").Preload("Company").First(&queryUser, user.Id)
+
+	if queryUser.Name != user.Name || queryUser.Age == user.Age {
+		t.Errorf("Should only update users with name column")
+	}
+
+	if queryUser.BillingAddressID.Int64 != user.BillingAddressID.Int64 ||
+		queryUser.ShippingAddressId == user.ShippingAddressId ||
+		queryUser.CreditCard.ID != user.CreditCard.ID ||
+		len(queryUser.Emails) != len(user.Emails) || queryUser.Company.Id != user.Company.Id {
+		t.Errorf("Should only update relationships not omited")
+	}
+}
+
+func TestSelectWithUpdateColumn(t *testing.T) {
+	user := getPreparedUser("select_user", "select_with_update_map")
+	DB.Create(user)
+
+	updateValues := map[string]interface{}{"Name": "new_name", "Age": 50}
+
+	var reloadUser User
+	DB.First(&reloadUser, user.Id)
+	DB.Model(&reloadUser).Select("Name").UpdateColumn(updateValues)
+
+	var queryUser User
+	DB.First(&queryUser, user.Id)
+
+	if queryUser.Name == user.Name || queryUser.Age != user.Age {
+		t.Errorf("Should only update users with name column")
+	}
+}
+
+func TestOmitWithUpdateColumn(t *testing.T) {
+	user := getPreparedUser("select_user", "select_with_update_map")
+	DB.Create(user)
+
+	updateValues := map[string]interface{}{"Name": "new_name", "Age": 50}
+
+	var reloadUser User
+	DB.First(&reloadUser, user.Id)
+	DB.Model(&reloadUser).Omit("Name").UpdateColumn(updateValues)
+
+	var queryUser User
+	DB.First(&queryUser, user.Id)
+
+	if queryUser.Name != user.Name || queryUser.Age == user.Age {
+		t.Errorf("Should omit name column when update user")
+	}
+}
+
+func TestUpdateColumnsSkipsAssociations(t *testing.T) {
+	user := getPreparedUser("update_columns_user", "special_role")
+	user.Age = 99
+	address1 := "first street"
+	user.BillingAddress = Address{Address1: address1}
+	DB.Save(user)
+
+	// Update a single field of the user and verify that the changed address is not stored.
+	newAge := int64(100)
+	user.BillingAddress.Address1 = "second street"
+	db := DB.Model(user).UpdateColumns(User{Age: newAge})
+	if db.RowsAffected != 1 {
+		t.Errorf("Expected RowsAffected=1 but instead RowsAffected=%v", DB.RowsAffected)
+	}
+
+	// Verify that Age now=`newAge`.
+	freshUser := &User{Id: user.Id}
+	DB.First(freshUser)
+	if freshUser.Age != newAge {
+		t.Errorf("Expected freshly queried user to have Age=%v but instead found Age=%v", newAge, freshUser.Age)
+	}
+
+	// Verify that user's BillingAddress.Address1 is not changed and is still "first street".
+	DB.First(&freshUser.BillingAddress, freshUser.BillingAddressID)
+	if freshUser.BillingAddress.Address1 != address1 {
+		t.Errorf("Expected user's BillingAddress.Address1=%s to remain unchanged after UpdateColumns invocation, but BillingAddress.Address1=%s", address1, freshUser.BillingAddress.Address1)
+	}
+}

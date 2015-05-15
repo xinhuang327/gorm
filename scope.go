@@ -10,16 +10,17 @@ import (
 )
 
 type Scope struct {
-	Value           interface{}
-	indirectValue   *reflect.Value
 	Search          *search
+	Value           interface{}
 	Sql             string
 	SqlVars         []interface{}
 	db              *DB
-	skipLeft        bool
-	primaryKeyField *Field
+	indirectValue   *reflect.Value
 	instanceId      string
+	primaryKeyField *Field
+	skipLeft        bool
 	fields          map[string]*Field
+	selectAttrs     *[]string
 }
 
 func (scope *Scope) IndirectValue() reflect.Value {
@@ -109,16 +110,21 @@ func (scope *Scope) HasError() bool {
 	return scope.db.Error != nil
 }
 
-func (scope *Scope) PrimaryKeyField() *Field {
-	if field := scope.GetModelStruct().PrimaryKeyField; field != nil {
-		return scope.Fields()[field.DBName]
+func (scope *Scope) PrimaryField() *Field {
+	if primaryFields := scope.GetModelStruct().PrimaryFields; len(primaryFields) > 0 {
+		if len(primaryFields) > 1 {
+			if field, ok := scope.Fields()["id"]; ok {
+				return field
+			}
+		}
+		return scope.Fields()[primaryFields[0].DBName]
 	}
 	return nil
 }
 
 // PrimaryKey get the primary key's column name
 func (scope *Scope) PrimaryKey() string {
-	if field := scope.PrimaryKeyField(); field != nil {
+	if field := scope.PrimaryField(); field != nil {
 		return field.DBName
 	}
 	return ""
@@ -126,13 +132,13 @@ func (scope *Scope) PrimaryKey() string {
 
 // PrimaryKeyZero check the primary key is blank or not
 func (scope *Scope) PrimaryKeyZero() bool {
-	field := scope.PrimaryKeyField()
+	field := scope.PrimaryField()
 	return field == nil || field.IsBlank
 }
 
 // PrimaryKeyValue get the primary key's value
 func (scope *Scope) PrimaryKeyValue() interface{} {
-	if field := scope.PrimaryKeyField(); field != nil && field.Field.IsValid() {
+	if field := scope.PrimaryField(); field != nil && field.Field.IsValid() {
 		return field.Field.Interface()
 	}
 	return 0
@@ -152,13 +158,18 @@ func (scope *Scope) HasColumn(column string) bool {
 func (scope *Scope) SetColumn(column interface{}, value interface{}) error {
 	if field, ok := column.(*Field); ok {
 		return field.Set(value)
-	} else if dbName, ok := column.(string); ok {
+	} else if name, ok := column.(string); ok {
+
+		if field, ok := scope.Fields()[name]; ok {
+			return field.Set(value)
+		}
+
+		dbName := ToDBName(name)
 		if field, ok := scope.Fields()[dbName]; ok {
 			return field.Set(value)
 		}
 
-		dbName = ToDBName(dbName)
-		if field, ok := scope.Fields()[dbName]; ok {
+		if field, ok := scope.FieldByName(name); ok {
 			return field.Set(value)
 		}
 	}
@@ -166,7 +177,7 @@ func (scope *Scope) SetColumn(column interface{}, value interface{}) error {
 }
 
 func (scope *Scope) CallMethod(name string, checkError bool) {
-	if scope.Value == nil && (!checkError || !scope.HasError()) {
+	if scope.Value == nil || (checkError && scope.HasError()) {
 		return
 	}
 
@@ -218,17 +229,39 @@ func (scope *Scope) AddToVars(value interface{}) string {
 	}
 }
 
+type tabler interface {
+	TableName() string
+}
+
+type dbTabler interface {
+	TableName(*DB) string
+}
+
 // TableName get table name
 func (scope *Scope) TableName() string {
-	if scope.Search != nil && len(scope.Search.TableName) > 0 {
-		return scope.Search.TableName
+	if scope.Search != nil && len(scope.Search.tableName) > 0 {
+		return scope.Search.tableName
 	}
-	return scope.GetModelStruct().TableName
+
+	if tabler, ok := scope.Value.(tabler); ok {
+		return tabler.TableName()
+	}
+
+	if tabler, ok := scope.Value.(dbTabler); ok {
+		return tabler.TableName(scope.db)
+	}
+
+	if scope.GetModelStruct().TableName != nil {
+		return scope.GetModelStruct().TableName(scope.db)
+	}
+
+	scope.Err(errors.New("wrong table name"))
+	return ""
 }
 
 func (scope *Scope) QuotedTableName() (name string) {
-	if scope.Search != nil && len(scope.Search.TableName) > 0 {
-		return scope.Quote(scope.Search.TableName)
+	if scope.Search != nil && len(scope.Search.tableName) > 0 {
+		return scope.Quote(scope.Search.tableName)
 	} else {
 		return scope.Quote(scope.TableName())
 	}
@@ -327,4 +360,78 @@ func (scope *Scope) CommitOrRollback() *Scope {
 		}
 	}
 	return scope
+}
+
+func (scope *Scope) SelectAttrs() []string {
+	if scope.selectAttrs == nil {
+		attrs := []string{}
+		for _, value := range scope.Search.selects {
+			if str, ok := value.(string); ok {
+				attrs = append(attrs, str)
+			} else if strs, ok := value.([]string); ok {
+				attrs = append(attrs, strs...)
+			} else if strs, ok := value.([]interface{}); ok {
+				for _, str := range strs {
+					attrs = append(attrs, fmt.Sprintf("%v", str))
+				}
+			}
+		}
+		scope.selectAttrs = &attrs
+	}
+	return *scope.selectAttrs
+}
+
+func (scope *Scope) OmitAttrs() []string {
+	return scope.Search.omits
+}
+
+func (scope *Scope) changeableDBColumn(column string) bool {
+	selectAttrs := scope.SelectAttrs()
+	omitAttrs := scope.OmitAttrs()
+
+	if len(selectAttrs) > 0 {
+		for _, attr := range selectAttrs {
+			if column == ToDBName(attr) {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, attr := range omitAttrs {
+		if column == ToDBName(attr) {
+			return false
+		}
+	}
+	return true
+}
+
+func (scope *Scope) changeableField(field *Field) bool {
+	selectAttrs := scope.SelectAttrs()
+	omitAttrs := scope.OmitAttrs()
+
+	if len(selectAttrs) > 0 {
+		for _, attr := range selectAttrs {
+			if field.Name == attr || field.DBName == attr {
+				return true
+			}
+		}
+		return false
+	}
+
+	for _, attr := range omitAttrs {
+		if field.Name == attr || field.DBName == attr {
+			return false
+		}
+	}
+
+	return !field.IsIgnored
+}
+
+func (scope *Scope) shouldSaveAssociations() bool {
+	saveAssociations, ok := scope.Get("gorm:save_associations")
+	if ok && !saveAssociations.(bool) {
+		return false
+	}
+	return true
 }

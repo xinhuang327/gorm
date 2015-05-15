@@ -121,3 +121,39 @@ func TestAnonymousField(t *testing.T) {
 		t.Errorf("Should be able to get anonymous field")
 	}
 }
+
+func TestSelectWithCreate(t *testing.T) {
+	user := getPreparedUser("select_user", "select_with_create")
+	DB.Select("Name", "BillingAddress", "CreditCard", "Company", "Emails").Create(user)
+
+	var queryuser User
+	DB.Preload("BillingAddress").Preload("ShippingAddress").
+		Preload("CreditCard").Preload("Emails").Preload("Company").First(&queryuser, user.Id)
+
+	if queryuser.Name != user.Name || queryuser.Age == user.Age {
+		t.Errorf("Should only create users with name column")
+	}
+
+	if queryuser.BillingAddressID.Int64 == 0 || queryuser.ShippingAddressId != 0 ||
+		queryuser.CreditCard.ID == 0 || len(queryuser.Emails) == 0 {
+		t.Errorf("Should only create selected relationships")
+	}
+}
+
+func TestOmitWithCreate(t *testing.T) {
+	user := getPreparedUser("omit_user", "omit_with_create")
+	DB.Omit("Name", "BillingAddress", "CreditCard", "Company", "Emails").Create(user)
+
+	var queryuser User
+	DB.Preload("BillingAddress").Preload("ShippingAddress").
+		Preload("CreditCard").Preload("Emails").Preload("Company").First(&queryuser, user.Id)
+
+	if queryuser.Name == user.Name || queryuser.Age != user.Age {
+		t.Errorf("Should only create users with age column")
+	}
+
+	if queryuser.BillingAddressID.Int64 != 0 || queryuser.ShippingAddressId == 0 ||
+		queryuser.CreditCard.ID != 0 || len(queryuser.Emails) != 0 {
+		t.Errorf("Should not create omited relationships")
+	}
+}
