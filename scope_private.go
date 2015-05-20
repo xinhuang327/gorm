@@ -438,7 +438,7 @@ func (scope *Scope) related(value interface{}, foreignKeys ...string) *Scope {
 					scope.Err(query.Find(value).Error)
 				}
 			} else {
-				if toField != nil && toField.DBName == fromField.DBName { // fix: if is referencing same table. By adrian huang
+				if false && toField != nil && toField.DBName == fromField.DBName { // fix: if is referencing same table. By adrian huang
 					sql := fmt.Sprintf("%v = ?", scope.Quote(toField.DBName))
 					scope.Err(toScope.db.Where(sql, scope.PrimaryKeyValue()).Find(value).Error)
 				} else {
