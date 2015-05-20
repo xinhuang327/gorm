@@ -417,6 +417,10 @@ func (scope *Scope) related(value interface{}, foreignKeys ...string) *Scope {
 		}
 
 		if fromField != nil {
+			// fmt.Println("fromField", fromField.DBName)
+			// if toField != nil {
+			// 	fmt.Println("toField", toField.DBName)
+			// }
 			if relationship := fromField.Relationship; relationship != nil {
 				if relationship.Kind == "many_to_many" {
 					joinTableHandler := relationship.JoinTableHandler
@@ -434,8 +438,13 @@ func (scope *Scope) related(value interface{}, foreignKeys ...string) *Scope {
 					scope.Err(query.Find(value).Error)
 				}
 			} else {
-				sql := fmt.Sprintf("%v = ?", scope.Quote(toScope.PrimaryKey()))
-				scope.Err(toScope.db.Where(sql, fromField.Field.Interface()).Find(value).Error)
+				if toField != nil && toField.DBName == fromField.DBName { // fix: if is referencing same table. By adrian huang
+					sql := fmt.Sprintf("%v = ?", scope.Quote(toField.DBName))
+					scope.Err(toScope.db.Where(sql, scope.PrimaryKeyValue()).Find(value).Error)
+				} else {
+					sql := fmt.Sprintf("%v = ?", scope.Quote(toScope.PrimaryKey()))
+					scope.Err(toScope.db.Where(sql, fromField.Field.Interface()).Find(value).Error)
+				}
 			}
 			return scope
 		} else if toField != nil {
