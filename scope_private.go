@@ -417,10 +417,10 @@ func (scope *Scope) related(value interface{}, foreignKeys ...string) *Scope {
 		}
 
 		if fromField != nil {
-			fmt.Println("fromField", fromField.DBName)
-			if toField != nil {
-				fmt.Println("toField", toField.DBName)
-			}
+//			fmt.Println("fromField", fromField.DBName)
+//			if toField != nil {
+//				fmt.Println("toField", toField.DBName)
+//			}
 			if relationship := fromField.Relationship; relationship != nil {
 				if relationship.Kind == "many_to_many" {
 					joinTableHandler := relationship.JoinTableHandler
